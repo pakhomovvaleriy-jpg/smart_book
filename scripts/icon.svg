@@ -1,0 +1,44 @@
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" fill="none" xmlns="http://www.w3.org/2000/svg">
+
+  <!-- Фон — сплошной индиго (без градиента, чтобы рендерилось в sharp/librsvg) -->
+  <rect width="1024" height="1024" fill="#4338CA"/>
+
+  <!-- Мягкий акцент в углу (простой прямоугольник вместо radialGradient) -->
+  <rect x="0" y="0" width="480" height="480" fill="#4F46E5" opacity="0.45"/>
+
+  <!-- ── Тело блокнота ── -->
+  <rect x="210" y="148" width="604" height="728" rx="48" fill="white"/>
+
+  <!-- ── Корешок (левый) ── -->
+  <path d="M 298,148 L 258,148 Q 210,148 210,196 L 210,828 Q 210,876 258,876 L 298,876 Z"
+        fill="#E0E7FF"/>
+
+  <!-- Разделительная линия корешка -->
+  <rect x="296" y="148" width="4" height="728" fill="#C7D2FE"/>
+
+  <!-- ── Кольца крепления ── -->
+  <circle cx="254" cy="330" r="24" fill="white" stroke="#818CF8" stroke-width="13"/>
+  <circle cx="254" cy="512" r="24" fill="white" stroke="#818CF8" stroke-width="13"/>
+  <circle cx="254" cy="694" r="24" fill="white" stroke="#818CF8" stroke-width="13"/>
+
+  <!-- ── Строки задач (заметно видимые) ── -->
+  <rect x="346" y="280" width="374" height="26" rx="13" fill="#6366F1" opacity="0.5"/>
+  <rect x="346" y="348" width="320" height="26" rx="13" fill="#6366F1" opacity="0.5"/>
+  <rect x="346" y="416" width="356" height="26" rx="13" fill="#6366F1" opacity="0.5"/>
+  <rect x="346" y="484" width="296" height="26" rx="13" fill="#6366F1" opacity="0.5"/>
+
+  <!-- Выполненная задача (чуть бледнее) -->
+  <rect x="346" y="600" width="230" height="26" rx="13" fill="#6366F1" opacity="0.28"/>
+
+  <!-- ── Галочка выполненной задачи ── -->
+  <circle cx="672" cy="609" r="56" fill="#22C55E"/>
+  <path d="M 645,609 L 665,631 L 703,585"
+        stroke="white" stroke-width="20" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+
+  <!-- ── Золотая звезда (правый верхний угол) ── -->
+  <circle cx="762" cy="196" r="78" fill="#FBBF24"/>
+  <!-- 4-лучевая звезда белая -->
+  <path d="M 762,138 L 786,172 L 820,196 L 786,220 L 762,254 L 738,220 L 704,196 L 738,172 Z"
+        fill="white"/>
+
+</svg>
