@@ -203,7 +203,7 @@ export default function TodayScreen() {
             keyExtractor={item => item.toISOString()}
             style={styles.stripList}
             contentContainerStyle={styles.stripContent}
-            getItemLayout={(_, index) => ({ length: 52, offset: 52 * index, index })}
+            getItemLayout={(_, index) => ({ length: 56, offset: 56 * index, index })}
             renderItem={({ item }) => {
               const isSelected = isSameDay(item, selectedDate);
               const isTodayDay = isToday(item);
@@ -422,9 +422,9 @@ const styles = StyleSheet.create({
 
   // Полоса
   stripList: { height: 76, flexGrow: 0, flexShrink: 0 },
-  stripContent: { paddingHorizontal: 14, alignItems: 'center', gap: 4 },
+  stripContent: { paddingHorizontal: 14, alignItems: 'center' },
   dayItem: {
-    width: 48, height: 64, borderRadius: 14,
+    width: 52, height: 64, borderRadius: 14,
     alignItems: 'center', justifyContent: 'center',
     gap: 2, marginHorizontal: 2,
   },
