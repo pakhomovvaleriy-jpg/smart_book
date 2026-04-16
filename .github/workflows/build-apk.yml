@@ -15,6 +15,8 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    env:
+      EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -46,8 +48,6 @@ jobs:
           else
             eas build --platform android --profile preview --local --non-interactive --output ./smartbook-preview.apk
           fi
-        env:
-          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
 
       - name: Upload RuStore APK
         if: ${{ inputs.profile == 'rustore' }}
