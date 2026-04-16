@@ -17,6 +17,13 @@
         "buildType": "apk"
       }
     },
+    "rustore": {
+      "distribution": "internal",
+      "android": {
+        "buildType": "apk",
+        "credentialsSource": "remote"
+      }
+    },
     "production": {
       "android": {
         "buildType": "app-bundle"
