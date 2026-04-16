@@ -428,8 +428,8 @@ const styles = StyleSheet.create({
     alignItems: 'center', justifyContent: 'center',
     gap: 2, marginHorizontal: 2,
   },
-  dayName: { fontSize: 11, textTransform: 'capitalize', opacity: 0.6 },
-  dayNum: { fontSize: 17 },
+  dayName: { fontSize: 11, textTransform: 'capitalize', opacity: 0.6, textAlign: 'center', width: '100%' },
+  dayNum: { fontSize: 17, textAlign: 'center', width: '100%' },
   todayDot: { width: 5, height: 5, borderRadius: 3, marginTop: 2 },
 
   // Сетка месяца
