@@ -41,6 +41,15 @@ jobs:
       - name: Install EAS CLI
         run: npm install -g eas-cli@latest
 
+      - name: Check EXPO_TOKEN
+        run: |
+          if [ -z "$EXPO_TOKEN" ]; then
+            echo "❌ EXPO_TOKEN is EMPTY — секрет не передаётся"
+            exit 1
+          else
+            echo "✅ EXPO_TOKEN is set, length: ${#EXPO_TOKEN}"
+          fi
+
       - name: Build APK (локально на GitHub, не считается в лимит EAS)
         run: |
           if [ "${{ inputs.profile }}" = "rustore" ]; then
