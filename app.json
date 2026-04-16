@@ -2,7 +2,7 @@
   "expo": {
     "name": "Мой планировщик",
     "slug": "smart_book",
-    "version": "1.0.1",
+    "version": "1.0.2",
     "scheme": "smartbook",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
@@ -18,7 +18,7 @@
     },
     "android": {
       "package": "com.smartbook.app",
-      "versionCode": 2,
+      "versionCode": 3,
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#4338CA"
