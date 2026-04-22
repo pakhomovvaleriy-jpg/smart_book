@@ -18,6 +18,11 @@ function serializeTags(tags: string[]): string {
   return JSON.stringify(tags);
 }
 
+function parseAttachments(raw: any): string[] {
+  if (Array.isArray(raw)) return raw;
+  try { return JSON.parse(raw ?? '[]'); } catch { return []; }
+}
+
 // ─── PROJECTS ───────────────────────────────────────────────────────────────
 
 export async function getProjects(): Promise<Project[]> {
@@ -75,7 +80,17 @@ export async function getTasks(projectId?: number): Promise<Task[]> {
          WHERE t.parent_id IS NULL
          ORDER BY t.order_index ASC, t.created_at DESC`
       );
-  return rows.map(r => ({ ...r, tags: parseTags(r.tags) }));
+  return rows.map(r => ({ ...r, tags: parseTags(r.tags), attachments: parseAttachments(r.attachments) }));
+}
+
+export async function getTaskById(id: number): Promise<Task | null> {
+  const db = await getDatabase();
+  const row = await db.getFirstAsync<any>(
+    `SELECT ${TASK_FIELDS} FROM tasks t WHERE t.id = ?`,
+    [id]
+  );
+  if (!row) return null;
+  return { ...row, tags: parseTags(row.tags), attachments: parseAttachments(row.attachments) };
 }
 
 export async function getTodayTasks(date?: string): Promise<Task[]> {
@@ -88,9 +103,17 @@ export async function getTodayTasks(date?: string): Promise<Task[]> {
     ? await db.getAllAsync<any>(
         `SELECT ${TASK_FIELDS} FROM tasks t
          WHERE t.parent_id IS NULL
-           AND (t.due_date = ? OR (t.due_date IS NULL AND t.project_id IS NULL))
+           AND (
+             t.due_date = ?
+             OR (t.due_date IS NULL AND t.project_id IS NULL)
+             OR (t.recurrence = 'daily' AND t.status != 'completed' AND t.due_date < ?)
+             OR (t.recurrence = 'weekly' AND t.status != 'completed' AND t.due_date < ?
+                 AND strftime('%w', t.due_date) = strftime('%w', ?))
+             OR (t.recurrence = 'monthly' AND t.status != 'completed' AND t.due_date < ?
+                 AND strftime('%d', t.due_date) = strftime('%d', ?))
+           )
          ORDER BY t.status ASC, t.priority DESC, t.created_at DESC`,
-        [target]
+        [target, target, target, target, target, target]
       )
     : await db.getAllAsync<any>(
         `SELECT ${TASK_FIELDS} FROM tasks t
@@ -99,7 +122,7 @@ export async function getTodayTasks(date?: string): Promise<Task[]> {
          ORDER BY t.status ASC, t.priority DESC, t.created_at DESC`,
         [target]
       );
-  return rows.map(r => ({ ...r, tags: parseTags(r.tags) }));
+  return rows.map(r => ({ ...r, tags: parseTags(r.tags), attachments: parseAttachments(r.attachments) }));
 }
 
 export async function getChildTasks(parentId: number): Promise<Task[]> {
@@ -188,6 +211,14 @@ export async function deleteNote(id: number): Promise<void> {
   await db.runAsync('DELETE FROM notes WHERE id = ?', [id]);
 }
 
+export async function advanceRecurringTask(id: number, nextDate: string): Promise<void> {
+  const db = await getDatabase();
+  await db.runAsync(
+    "UPDATE tasks SET due_date = ?, status = 'pending', updated_at = datetime('now') WHERE id = ?",
+    [nextDate, id]
+  );
+}
+
 export async function updateTaskNotificationId(id: number, notificationId: string | null, reminderAt?: string | null): Promise<void> {
   const db = await getDatabase();
   await db.runAsync(
@@ -244,6 +275,14 @@ export async function deleteSubtask(id: number): Promise<void> {
 export async function updateSubtaskTitle(id: number, title: string): Promise<void> {
   const db = await getDatabase();
   await db.runAsync('UPDATE subtasks SET title = ? WHERE id = ?', [title, id]);
+}
+
+export async function updateTaskAttachments(id: number, attachments: string[]): Promise<void> {
+  const db = await getDatabase();
+  await db.runAsync(
+    "UPDATE tasks SET attachments = ?, updated_at = datetime('now') WHERE id = ?",
+    [JSON.stringify(attachments), id]
+  );
 }
 
 // ─── STATISTICS ──────────────────────────────────────────────────────────────

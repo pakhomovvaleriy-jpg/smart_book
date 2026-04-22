@@ -2,7 +2,7 @@
   "expo": {
     "name": "Мой планировщик",
     "slug": "smart_book",
-    "version": "1.0.2",
+    "version": "1.0.3",
     "scheme": "smartbook",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
@@ -18,7 +18,7 @@
     },
     "android": {
       "package": "com.smartbook.app",
-      "versionCode": 3,
+      "versionCode": 4,
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#4338CA"
@@ -26,7 +26,9 @@
       "permissions": [
         "android.permission.RECEIVE_BOOT_COMPLETED",
         "android.permission.VIBRATE",
-        "android.permission.SCHEDULE_EXACT_ALARM"
+        "android.permission.SCHEDULE_EXACT_ALARM",
+        "android.permission.READ_MEDIA_IMAGES",
+        "android.permission.READ_EXTERNAL_STORAGE"
       ],
       "edgeToEdgeEnabled": true
     },
@@ -43,6 +45,7 @@
       "expo-router",
       "expo-sqlite",
       "expo-font",
+      "expo-image-picker",
       [
         "expo-notifications",
         {

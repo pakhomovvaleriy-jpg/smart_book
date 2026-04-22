@@ -1,7 +1,12 @@
 import { create } from 'zustand';
 import type { Task, Priority } from '../types';
 import * as Q from '../db/queries';
-import { cancelTaskReminder } from '../utils/notifications';
+import { cancelTaskReminder, scheduleTaskReminder } from '../utils/notifications';
+
+function todayDateStr(): string {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
 
 function getNextDueDate(dueDate: string, recurrence: string): string {
   const date = new Date(dueDate + 'T00:00:00');
@@ -62,11 +67,24 @@ export const useTasksStore = create<TasksState>((set, get) => ({
         await cancelTaskReminder(task.notification_id);
         await Q.updateTaskNotificationId(id, null, null);
       }
-      // Создаём следующее повторение
-      if (task?.recurrence && task.recurrence !== 'none' && task.due_date) {
-        const nextDate = getNextDueDate(task.due_date, task.recurrence);
-        await Q.createTask(task.title, task.priority, task.project_id, nextDate, task.description, undefined, task.recurrence);
-        await get().fetchTasks(task.project_id);
+      // Сбрасываем повторяющуюся задачу на следующую дату
+      if (task?.recurrence && task.recurrence !== 'none') {
+        const base = task.due_date ?? todayDateStr();
+        const nextDate = getNextDueDate(base, task.recurrence);
+        await Q.advanceRecurringTask(id, nextDate);
+        // Переставляем напоминание на то же время в новую дату
+        if (task.reminder_at) {
+          const oldReminder = new Date(task.reminder_at);
+          const newReminder = new Date(nextDate + 'T00:00:00');
+          newReminder.setHours(oldReminder.getHours(), oldReminder.getMinutes(), 0, 0);
+          if (newReminder > new Date()) {
+            const newNotifId = await scheduleTaskReminder(task.title, newReminder, id);
+            if (newNotifId) {
+              await Q.updateTaskNotificationId(id, newNotifId, newReminder.toISOString());
+            }
+          }
+        }
+        await get().fetchTasks(task.project_id ?? undefined);
         await get().fetchTodayTasks();
         return;
       }

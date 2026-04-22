@@ -1,23 +1,25 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import {
   View, ScrollView, TextInput, TouchableOpacity,
-  StyleSheet, Alert,
+  StyleSheet, Alert, KeyboardAvoidingView, Platform,
+  Image, Modal, useWindowDimensions, Pressable,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
+import * as ImagePicker from 'expo-image-picker';
 import { format } from 'date-fns';
 import { ThemedView } from '../../components/ui/ThemedView';
 import { ThemedText } from '../../components/ui/ThemedText';
-import { TagChip } from '../../components/ui/TagChip';
-import { SubtaskItem } from '../../components/tasks/SubtaskItem';
 import { useTheme } from '../../hooks/useTheme';
 import { useTasksStore } from '../../store/tasksStore';
-import { useSubtasksStore } from '../../store/subtasksStore';
 import { DatePickerModal } from '../../components/ui/DatePickerModal';
-import { updateTaskTags, updateTaskNotificationId, updateTask } from '../../db/queries';
-import { scheduleTaskReminder, cancelTaskReminder } from '../../utils/notifications';
+import {
+  updateTask, getChildTasks, createTask, updateTaskStatus,
+  getTaskById, updateTaskAttachments,
+} from '../../db/queries';
+import type { Task } from '../../types';
 import { PriorityColors } from '../../constants/colors';
 import type { Priority, Recurrence } from '../../types';
 
@@ -39,51 +41,96 @@ export default function TaskDetailScreen() {
   const taskId = Number(id);
   const router = useRouter();
   const theme = useTheme();
+  const { width } = useWindowDimensions();
 
-  const { tasks, todayTasks, fetchTasks, changePriority, removeTask, setNotificationId } = useTasksStore();
-  const { subtasks, fetchSubtasks, addSubtask, toggleSubtask, removeSubtask, clear } = useSubtasksStore();
+  const { tasks, todayTasks, fetchTasks, changePriority, removeTask } = useTasksStore();
+  const [fetchedTask, setFetchedTask] = useState<Task | null>(null);
 
-  const task = tasks.find(t => t.id === taskId) ?? todayTasks.find(t => t.id === taskId);
+  const task = tasks.find(t => t.id === taskId) ?? todayTasks.find(t => t.id === taskId) ?? fetchedTask ?? undefined;
 
   useEffect(() => {
-    if (!task) fetchTasks();
-  }, []);
+    getTaskById(taskId).then(t => { if (t) setFetchedTask(t); });
+  }, [taskId]);
+
   const [titleEdit, setTitleEdit] = useState('');
+  const [noteEdit, setNoteEdit] = useState('');
   const [recurrence, setRecurrence] = useState<Recurrence>('none');
-  const [subtaskInput, setSubtaskInput] = useState('');
-  const [tagInput, setTagInput] = useState('');
-  const [tags, setTags] = useState<string[]>([]);
-  const [notifId, setNotifId] = useState<string | null>(null);
   const [dueDatePickerOpen, setDueDatePickerOpen] = useState(false);
   const [taskDueDate, setTaskDueDate] = useState<Date | null>(null);
-  const [reminderPickerOpen, setReminderPickerOpen] = useState(false);
-  const [reminderDate, setReminderDate] = useState<Date | null>(null);
-  const [reminderHour, setReminderHour] = useState(9);
-  const [reminderMinute, setReminderMinute] = useState(0);
-  const inputRef = useRef<TextInput>(null);
+  const [childTasks, setChildTasks] = useState<Task[]>([]);
+  const [childInput, setChildInput] = useState('');
+  const [attachments, setAttachments] = useState<string[]>([]);
+  const [viewerUri, setViewerUri] = useState<string | null>(null);
+  const [expandedIds, setExpandedIds] = useState<Set<number>>(new Set());
+  const [grandchildren, setGrandchildren] = useState<Record<number, Task[]>>({});
+  const [grandInputs, setGrandInputs] = useState<Record<number, string>>({});
 
   useEffect(() => {
-    fetchSubtasks(taskId);
-    return () => clear();
+    loadChildTasks();
   }, [taskId]);
+
+  const loadChildTasks = async () => {
+    const kids = await getChildTasks(taskId);
+    setChildTasks(kids);
+  };
+
+  const handleAddChildTask = async () => {
+    const title = childInput.trim();
+    if (!title) return;
+    setChildInput('');
+    await createTask(title, 'medium', task?.project_id ?? undefined, task?.due_date ?? undefined, undefined, taskId);
+    loadChildTasks();
+  };
+
+  const handleToggleChild = async (child: Task) => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    const next = child.status === 'completed' ? 'pending' : 'completed';
+    await updateTaskStatus(child.id, next as any);
+    setChildTasks(prev => prev.map(c => c.id === child.id ? { ...c, status: next as any } : c));
+  };
+
+  const handleToggleExpand = async (childId: number) => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    setExpandedIds(prev => {
+      const next = new Set(prev);
+      if (next.has(childId)) { next.delete(childId); return next; }
+      next.add(childId);
+      return next;
+    });
+    if (!grandchildren[childId]) {
+      const kids = await getChildTasks(childId);
+      setGrandchildren(prev => ({ ...prev, [childId]: kids }));
+    }
+  };
+
+  const handleToggleGrand = async (parentId: number, grand: Task) => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    const next = grand.status === 'completed' ? 'pending' : 'completed';
+    await updateTaskStatus(grand.id, next as any);
+    setGrandchildren(prev => ({
+      ...prev,
+      [parentId]: (prev[parentId] ?? []).map(g => g.id === grand.id ? { ...g, status: next as any } : g),
+    }));
+  };
+
+  const handleAddGrand = async (parentId: number) => {
+    const title = (grandInputs[parentId] ?? '').trim();
+    if (!title) return;
+    setGrandInputs(prev => ({ ...prev, [parentId]: '' }));
+    const parentTask = childTasks.find(c => c.id === parentId);
+    await createTask(title, 'medium', task?.project_id ?? undefined, parentTask?.due_date ?? undefined, undefined, parentId);
+    const kids = await getChildTasks(parentId);
+    setGrandchildren(prev => ({ ...prev, [parentId]: kids }));
+  };
 
   useEffect(() => {
     if (task) {
       setTitleEdit(task.title);
-      setTags(task.tags ?? []);
+      setNoteEdit(task.description ?? '');
       setRecurrence((task.recurrence as Recurrence) ?? 'none');
-      setNotifId(task.notification_id ?? null);
+      setAttachments(task.attachments ?? []);
       if (task.due_date) {
-        const d = new Date(task.due_date + 'T00:00:00');
-        setTaskDueDate(d);
-        if (!task.reminder_at) setReminderDate(d);
-      }
-      // Восстанавливаем дату и время напоминания из БД
-      if (task.reminder_at) {
-        const rd = new Date(task.reminder_at);
-        setReminderDate(rd);
-        setReminderHour(rd.getHours());
-        setReminderMinute(rd.getMinutes());
+        setTaskDueDate(new Date(task.due_date + 'T00:00:00'));
       }
     }
   }, [task?.id]);
@@ -100,55 +147,48 @@ export default function TaskDetailScreen() {
     await fetchTasks();
   };
 
-  const handleAddTag = async () => {
-    const tag = tagInput.trim().toLowerCase().replace(/\s+/g, '-').replace(/[^a-zа-яё0-9-]/gi, '');
-    if (!tag || tags.includes(tag)) { setTagInput(''); return; }
-    const newTags = [...tags, tag];
-    setTags(newTags);
-    setTagInput('');
-    await updateTaskTags(taskId, newTags);
-  };
-
-  const handleRemoveTag = async (tag: string) => {
-    const newTags = tags.filter(t => t !== tag);
-    setTags(newTags);
-    await updateTaskTags(taskId, newTags);
+  const handleNoteSave = async () => {
+    if (noteEdit === (task?.description ?? '')) return;
+    await updateTask(taskId, { description: noteEdit });
   };
 
   const handleSetDueDate = async (date: Date | null) => {
     setTaskDueDate(date);
-    setReminderDate(date);
     const dateStr = date ? format(date, 'yyyy-MM-dd') : null;
     await updateTask(taskId, { due_date: dateStr });
   };
 
-  const handleSetReminder = async () => {
-    if (!reminderDate) return;
-    if (notifId) await cancelTaskReminder(notifId);
-    const fireDate = new Date(reminderDate);
-    fireDate.setHours(reminderHour, reminderMinute, 0, 0);
-    if (fireDate <= new Date()) {
-      Alert.alert('Выбери время в будущем');
+  const handlePickImage = async () => {
+    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (status !== 'granted') {
+      Alert.alert('Нет доступа', 'Разрешите доступ к галерее в настройках');
       return;
     }
-    const id = await scheduleTaskReminder(task!.title, fireDate, taskId);
-    if (id) {
-      const reminderAt = fireDate.toISOString();
-      setNotifId(id);
-      await updateTaskNotificationId(taskId, id, reminderAt);
-      setNotificationId(taskId, id, reminderAt);
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ['images'],
+      quality: 0.8,
+      allowsMultipleSelection: true,
+    });
+    if (!result.canceled) {
+      const uris = result.assets.map(a => a.uri);
+      const next = [...attachments, ...uris];
+      setAttachments(next);
+      await updateTaskAttachments(taskId, next);
     }
   };
 
-  const handleCancelReminder = async () => {
-    if (!notifId) return;
-    await cancelTaskReminder(notifId);
-    setNotifId(null);
-    setReminderDate(taskDueDate); // возвращаем к дате задачи (или null)
-    await updateTaskNotificationId(taskId, null, null);
-    setNotificationId(taskId, null, null);
-  };
-
+  const handleDeleteAttachment = useCallback((uri: string) => {
+    Alert.alert('Удалить фото?', '', [
+      { text: 'Отмена', style: 'cancel' },
+      {
+        text: 'Удалить', style: 'destructive', onPress: async () => {
+          const next = attachments.filter(a => a !== uri);
+          setAttachments(next);
+          await updateTaskAttachments(taskId, next);
+        },
+      },
+    ]);
+  }, [attachments, taskId]);
 
   if (!task) {
     return (
@@ -166,15 +206,8 @@ export default function TaskDetailScreen() {
     );
   }
 
-  const handleAddSubtask = async () => {
-    const title = subtaskInput.trim();
-    if (!title) return;
-    setSubtaskInput('');
-    await addSubtask(taskId, title);
-  };
-
   const handleDeleteTask = () => {
-    Alert.alert('Удалить задачу?', 'Все подпункты тоже удалятся', [
+    Alert.alert('Удалить задачу?', 'Все подзадачи тоже удалятся', [
       { text: 'Отмена', style: 'cancel' },
       {
         text: 'Удалить', style: 'destructive', onPress: async () => {
@@ -185,9 +218,7 @@ export default function TaskDetailScreen() {
     ]);
   };
 
-  const completedCount = subtasks.filter(s => s.completed === 1).length;
-  const totalCount = subtasks.length;
-  const progress = totalCount > 0 ? completedCount / totalCount : 0;
+  const thumbSize = (width - 20 * 2 - 8 * 2) / 3;
 
   return (
     <ThemedView style={styles.root}>
@@ -204,266 +235,250 @@ export default function TaskDetailScreen() {
           </TouchableOpacity>
         </View>
 
-        <ScrollView style={styles.scroll} showsVerticalScrollIndicator={false}>
+        <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
+          <ScrollView style={styles.scroll} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
 
-          {/* Название задачи */}
-          <View style={styles.titleSection}>
-            <View style={[styles.priorityBar, { backgroundColor: PriorityColors[task.priority] }]} />
-            <TextInput
-              style={[styles.taskTitle, { color: theme.text }]}
-              value={titleEdit}
-              onChangeText={setTitleEdit}
-              onBlur={handleTitleSave}
-              onSubmitEditing={handleTitleSave}
-              multiline
-              returnKeyType="done"
-              blurOnSubmit
-            />
-          </View>
-
-          {/* Дата */}
-          <View style={styles.section}>
-            <ThemedText variant="secondary" style={styles.sectionLabel}>ДАТА</ThemedText>
-            <TouchableOpacity
-              style={[styles.dateRow, { backgroundColor: theme.card, borderColor: theme.border }]}
-              onPress={() => setDueDatePickerOpen(true)}
-            >
-              <Ionicons
-                name="calendar-outline"
-                size={18}
-                color={taskDueDate ? theme.primary : theme.textSecondary}
+            {/* Название задачи */}
+            <View style={styles.titleSection}>
+              <View style={[styles.priorityBar, { backgroundColor: PriorityColors[task.priority] }]} />
+              <TextInput
+                style={[styles.taskTitle, { color: theme.text }]}
+                value={titleEdit}
+                onChangeText={setTitleEdit}
+                onBlur={handleTitleSave}
+                onSubmitEditing={handleTitleSave}
+                multiline
+                returnKeyType="done"
+                blurOnSubmit
               />
-              <ThemedText style={[styles.dateRowText, { color: taskDueDate ? theme.text : theme.textSecondary }]}>
-                {taskDueDate
-                  ? taskDueDate.toLocaleDateString('ru-RU', { weekday: 'short', day: 'numeric', month: 'long' })
-                  : 'Добавить дату'}
-              </ThemedText>
-              {taskDueDate && (
-                <TouchableOpacity onPress={() => handleSetDueDate(null)} hitSlop={8}>
-                  <Ionicons name="close-circle" size={18} color={theme.textSecondary} />
-                </TouchableOpacity>
-              )}
-            </TouchableOpacity>
-          </View>
-
-          {/* Приоритет */}
-          <View style={styles.section}>
-            <ThemedText variant="secondary" style={styles.sectionLabel}>ПРИОРИТЕТ</ThemedText>
-            <View style={styles.priorityRow}>
-              {PRIORITIES.map(p => (
-                <TouchableOpacity
-                  key={p.value}
-                  onPress={() => {
-                    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                    changePriority(task.id, p.value);
-                  }}
-                  style={[
-                    styles.priorityChip,
-                    { borderColor: PriorityColors[p.value] },
-                    task.priority === p.value && { backgroundColor: PriorityColors[p.value] },
-                  ]}
-                >
-                  <ThemedText style={[
-                    styles.priorityChipText,
-                    { color: task.priority === p.value ? '#fff' : PriorityColors[p.value] },
-                  ]}>
-                    {p.label}
-                  </ThemedText>
-                </TouchableOpacity>
-              ))}
             </View>
-          </View>
 
-          {/* Повторение */}
-          <View style={styles.section}>
-            <ThemedText variant="secondary" style={styles.sectionLabel}>ПОВТОРЕНИЕ</ThemedText>
-            <View style={styles.recurrenceRow}>
-              {RECURRENCES.map(r => (
-                <TouchableOpacity
-                  key={r.value}
-                  onPress={() => handleRecurrenceChange(r.value)}
-                  style={[
-                    styles.recurrenceChip,
-                    { borderColor: theme.border },
-                    recurrence === r.value && { backgroundColor: theme.primary, borderColor: theme.primary },
-                  ]}
-                >
-                  {r.value !== 'none' && (
-                    <Ionicons
-                      name="repeat"
-                      size={12}
-                      color={recurrence === r.value ? '#fff' : theme.textSecondary}
-                    />
-                  )}
-                  <ThemedText style={[
-                    styles.recurrenceChipText,
-                    { color: recurrence === r.value ? '#fff' : theme.text },
-                  ]}>
-                    {r.label}
-                  </ThemedText>
-                </TouchableOpacity>
-              ))}
-            </View>
-          </View>
-
-          {/* Теги */}
-          <View style={styles.section}>
-            <ThemedText variant="secondary" style={styles.sectionLabel}>ТЕГИ</ThemedText>
-            <View style={styles.tagsWrap}>
-              {tags.map(tag => (
-                <TagChip key={tag} tag={tag} onRemove={() => handleRemoveTag(tag)} />
-              ))}
-              <View style={[styles.tagInputRow, { backgroundColor: theme.card, borderColor: theme.border }]}>
-                <ThemedText style={[styles.tagHash, { color: theme.textSecondary }]}>#</ThemedText>
-                <TextInput
-                  style={[styles.tagInput, { color: theme.text }]}
-                  placeholder="новый тег"
-                  placeholderTextColor={theme.textSecondary}
-                  value={tagInput}
-                  onChangeText={setTagInput}
-                  onSubmitEditing={handleAddTag}
-                  returnKeyType="done"
-                  autoCapitalize="none"
-                />
-              </View>
-            </View>
-          </View>
-
-          {/* Напоминание */}
-          <View style={styles.section}>
-            <ThemedText variant="secondary" style={styles.sectionLabel}>НАПОМИНАНИЕ</ThemedText>
-            <View style={[styles.reminderCard, { backgroundColor: theme.card, borderColor: theme.border }]}>
-              {/* Выбор даты */}
+            {/* Дата */}
+            <View style={styles.section}>
+              <ThemedText variant="secondary" style={styles.sectionLabel}>ДАТА</ThemedText>
               <TouchableOpacity
-                style={styles.reminderDateRow}
-                onPress={() => setReminderPickerOpen(true)}
+                style={[styles.dateRow, { backgroundColor: theme.card, borderColor: theme.border }]}
+                onPress={() => setDueDatePickerOpen(true)}
               >
-                <Ionicons name="calendar-outline" size={18} color={theme.primary} />
-                <ThemedText style={[styles.reminderDateText, { color: theme.primary }]}>
-                  {reminderDate
-                    ? reminderDate.toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric' })
-                    : 'Выбрать дату'}
+                <Ionicons name="calendar-outline" size={18} color={taskDueDate ? theme.primary : theme.textSecondary} />
+                <ThemedText style={[styles.dateRowText, { color: taskDueDate ? theme.text : theme.textSecondary }]}>
+                  {taskDueDate
+                    ? taskDueDate.toLocaleDateString('ru-RU', { weekday: 'short', day: 'numeric', month: 'long' })
+                    : 'Добавить дату'}
                 </ThemedText>
-                <Ionicons name="chevron-forward" size={16} color={theme.textSecondary} />
+                {taskDueDate && (
+                  <TouchableOpacity onPress={() => handleSetDueDate(null)} hitSlop={8}>
+                    <Ionicons name="close-circle" size={18} color={theme.textSecondary} />
+                  </TouchableOpacity>
+                )}
               </TouchableOpacity>
+            </View>
 
-              {/* Выбор времени */}
-              {reminderDate && !notifId && (
-                <>
-                  <View style={[styles.timeDivider, { backgroundColor: theme.border }]} />
-                  <View style={styles.timePickerRow}>
-                    <Ionicons name="time-outline" size={18} color={theme.primary} />
-                    {/* Часы */}
-                    <View style={styles.timeSpinner}>
-                      <TouchableOpacity onPress={() => setReminderHour(h => (h + 1) % 24)} hitSlop={8}>
-                        <Ionicons name="chevron-up" size={18} color={theme.primary} />
-                      </TouchableOpacity>
-                      <ThemedText style={styles.timeSpinnerVal}>
-                        {String(reminderHour).padStart(2, '0')}
-                      </ThemedText>
-                      <TouchableOpacity onPress={() => setReminderHour(h => (h - 1 + 24) % 24)} hitSlop={8}>
-                        <Ionicons name="chevron-down" size={18} color={theme.primary} />
-                      </TouchableOpacity>
-                    </View>
-                    <ThemedText style={styles.timeColon}>:</ThemedText>
-                    {/* Минуты */}
-                    <View style={styles.timeSpinner}>
-                      <TouchableOpacity onPress={() => setReminderMinute(m => (m + 5) % 60)} hitSlop={8}>
-                        <Ionicons name="chevron-up" size={18} color={theme.primary} />
-                      </TouchableOpacity>
-                      <ThemedText style={styles.timeSpinnerVal}>
-                        {String(reminderMinute).padStart(2, '0')}
-                      </ThemedText>
-                      <TouchableOpacity onPress={() => setReminderMinute(m => (m - 5 + 60) % 60)} hitSlop={8}>
-                        <Ionicons name="chevron-down" size={18} color={theme.primary} />
-                      </TouchableOpacity>
-                    </View>
+            {/* Приоритет */}
+            <View style={styles.section}>
+              <ThemedText variant="secondary" style={styles.sectionLabel}>ПРИОРИТЕТ</ThemedText>
+              <View style={styles.chipsRow}>
+                {PRIORITIES.map(p => {
+                  const active = task.priority === p.value;
+                  return (
                     <TouchableOpacity
-                      onPress={handleSetReminder}
-                      style={[styles.setReminderBtn, { backgroundColor: theme.primary }]}
+                      key={p.value}
+                      onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); changePriority(task.id, p.value); }}
+                      style={[
+                        styles.chip,
+                        { borderColor: PriorityColors[p.value] },
+                        active && { backgroundColor: PriorityColors[p.value] },
+                      ]}
                     >
-                      <Ionicons name="notifications-outline" size={16} color="#fff" />
-                      <ThemedText style={styles.setReminderBtnText}>Установить</ThemedText>
+                      <View style={[styles.chipDot, { backgroundColor: active ? '#fff' : PriorityColors[p.value] }]} />
+                      <ThemedText style={[styles.chipText, { color: active ? '#fff' : PriorityColors[p.value] }]}>
+                        {p.label}
+                      </ThemedText>
                     </TouchableOpacity>
-                  </View>
-                </>
-              )}
-
-              {/* Активное напоминание */}
-              {notifId && reminderDate && (
-                <>
-                  <View style={[styles.timeDivider, { backgroundColor: theme.border }]} />
-                  <View style={styles.activeReminderRow}>
-                    <Ionicons name="notifications" size={18} color="#22C55E" />
-                    <ThemedText style={[styles.activeReminderText, { color: '#22C55E' }]}>
-                      {reminderDate.toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' })}
-                      {' в '}
-                      {String(reminderHour).padStart(2, '0')}:{String(reminderMinute).padStart(2, '0')}
-                    </ThemedText>
-                    <TouchableOpacity onPress={handleCancelReminder} hitSlop={8}>
-                      <Ionicons name="close-circle" size={20} color={theme.danger} />
-                    </TouchableOpacity>
-                  </View>
-                </>
-              )}
-            </View>
-          </View>
-
-          {/* Подпункты */}
-          <View style={styles.section}>
-            <View style={styles.subtaskHeader}>
-              <ThemedText variant="secondary" style={styles.sectionLabel}>
-                ПОДПУНКТЫ
-              </ThemedText>
-              {totalCount > 0 && (
-                <ThemedText variant="secondary" style={styles.sectionLabel}>
-                  {completedCount}/{totalCount}
-                </ThemedText>
-              )}
-            </View>
-
-            {/* Прогресс-бар подпунктов */}
-            {totalCount > 0 && (
-              <View style={[styles.progressBarBg, { backgroundColor: theme.border }]}>
-                <View style={[
-                  styles.progressBarFill,
-                  { width: `${progress * 100}%`, backgroundColor: theme.primary },
-                ]} />
-              </View>
-            )}
-
-            {/* Список подпунктов */}
-            <View style={[styles.subtaskList, { backgroundColor: theme.card, borderColor: theme.border }]}>
-              {subtasks.map(st => (
-                <SubtaskItem
-                  key={st.id}
-                  subtask={st}
-                  priority={task.priority}
-                  onToggle={toggleSubtask}
-                  onDelete={removeSubtask}
-                />
-              ))}
-
-              {/* Поле добавления подпункта */}
-              <View style={[styles.addSubtaskRow, { borderTopColor: subtasks.length > 0 ? theme.border : 'transparent' }]}>
-                <Ionicons name="add" size={20} color={theme.primary} />
-                <TextInput
-                  ref={inputRef}
-                  style={[styles.subtaskInput, { color: theme.text }]}
-                  placeholder="Добавить подпункт..."
-                  placeholderTextColor={theme.textSecondary}
-                  value={subtaskInput}
-                  onChangeText={setSubtaskInput}
-                  onSubmitEditing={handleAddSubtask}
-                  returnKeyType="done"
-                  blurOnSubmit={false}
-                />
+                  );
+                })}
               </View>
             </View>
-          </View>
 
-          <View style={{ height: 40 }} />
-        </ScrollView>
+            {/* Повторение */}
+            <View style={styles.section}>
+              <ThemedText variant="secondary" style={styles.sectionLabel}>ПОВТОРЕНИЕ</ThemedText>
+              <View style={styles.chipsWrap}>
+                {RECURRENCES.map(r => {
+                  const active = recurrence === r.value;
+                  return (
+                    <TouchableOpacity
+                      key={r.value}
+                      onPress={() => handleRecurrenceChange(r.value)}
+                      style={[
+                        styles.chip,
+                        { borderColor: active ? theme.primary : theme.border },
+                        active && { backgroundColor: theme.primary },
+                      ]}
+                    >
+                      {r.value !== 'none' && (
+                        <Ionicons name="repeat" size={11} color={active ? '#fff' : theme.textSecondary} />
+                      )}
+                      <ThemedText style={[styles.chipText, { color: active ? '#fff' : theme.text }]}>
+                        {r.label}
+                      </ThemedText>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+            </View>
+
+            {/* Заметка */}
+            <View style={styles.section}>
+              <ThemedText variant="secondary" style={styles.sectionLabel}>ЗАМЕТКА</ThemedText>
+              <TextInput
+                style={[styles.noteInput, { color: theme.text, backgroundColor: theme.card, borderColor: theme.border }]}
+                value={noteEdit}
+                onChangeText={setNoteEdit}
+                onBlur={handleNoteSave}
+                placeholder="Добавить заметку..."
+                placeholderTextColor={theme.textSecondary}
+                multiline
+                textAlignVertical="top"
+              />
+            </View>
+
+            {/* Вложения */}
+            <View style={styles.section}>
+              <View style={styles.attachHeader}>
+                <ThemedText variant="secondary" style={styles.sectionLabel}>ВЛОЖЕНИЯ</ThemedText>
+                <TouchableOpacity onPress={handlePickImage} style={styles.addPhotoBtn} hitSlop={8}>
+                  <Ionicons name="add" size={18} color={theme.primary} />
+                  <ThemedText style={[styles.addPhotoText, { color: theme.primary }]}>Добавить фото</ThemedText>
+                </TouchableOpacity>
+              </View>
+              {attachments.length > 0 && (
+                <View style={styles.thumbGrid}>
+                  {attachments.map((uri, i) => (
+                    <TouchableOpacity
+                      key={i}
+                      onPress={() => setViewerUri(uri)}
+                      onLongPress={() => handleDeleteAttachment(uri)}
+                      activeOpacity={0.8}
+                    >
+                      <Image
+                        source={{ uri }}
+                        style={[styles.thumb, { width: thumbSize, height: thumbSize }]}
+                      />
+                    </TouchableOpacity>
+                  ))}
+                </View>
+              )}
+            </View>
+
+            {/* Подзадачи */}
+            <View style={styles.section}>
+              <View style={styles.subtaskHeader}>
+                <ThemedText variant="secondary" style={styles.sectionLabel}>ПОДЗАДАЧИ</ThemedText>
+                {childTasks.length > 0 && (
+                  <ThemedText variant="secondary" style={styles.sectionLabel}>
+                    {childTasks.filter(c => c.status === 'completed').length}/{childTasks.length}
+                  </ThemedText>
+                )}
+              </View>
+              <View style={[styles.subtaskList, { backgroundColor: theme.card, borderColor: theme.border }]}>
+                {childTasks.map((child, i) => {
+                  const childDone = child.status === 'completed';
+                  const expanded = expandedIds.has(child.id);
+                  const grands = grandchildren[child.id] ?? [];
+                  return (
+                    <View key={child.id}>
+                      {/* Строка подзадачи */}
+                      <View style={[styles.childTaskRow, { borderTopColor: i === 0 ? 'transparent' : theme.border }]}>
+                        <TouchableOpacity onPress={() => handleToggleChild(child)} hitSlop={8}>
+                          <View style={[
+                            styles.childCheck,
+                            { borderColor: childDone ? theme.primary : theme.border },
+                            childDone && { backgroundColor: theme.primary },
+                          ]}>
+                            {childDone && <Ionicons name="checkmark" size={11} color="#fff" />}
+                          </View>
+                        </TouchableOpacity>
+                        <ThemedText
+                          style={[styles.childTaskTitle, childDone && { textDecorationLine: 'line-through', opacity: 0.4 }]}
+                          numberOfLines={1}
+                        >
+                          {child.title}
+                        </ThemedText>
+                        <TouchableOpacity onPress={() => handleToggleExpand(child.id)} hitSlop={8}>
+                          <Ionicons
+                            name={expanded ? 'chevron-down' : 'chevron-forward'}
+                            size={14}
+                            color={theme.textSecondary}
+                          />
+                        </TouchableOpacity>
+                      </View>
+
+                      {/* Вложенные подзадачи (аккордеон) */}
+                      {expanded && (
+                        <View style={[styles.grandList, { borderTopColor: theme.border, backgroundColor: theme.background }]}>
+                          {grands.map((grand, gi) => {
+                            const grandDone = grand.status === 'completed';
+                            return (
+                              <View
+                                key={grand.id}
+                                style={[styles.grandRow, { borderTopColor: gi === 0 ? 'transparent' : theme.border }]}
+                              >
+                                <TouchableOpacity onPress={() => handleToggleGrand(child.id, grand)} hitSlop={8}>
+                                  <View style={[
+                                    styles.grandCheck,
+                                    { borderColor: grandDone ? theme.primary : theme.border },
+                                    grandDone && { backgroundColor: theme.primary },
+                                  ]}>
+                                    {grandDone && <Ionicons name="checkmark" size={9} color="#fff" />}
+                                  </View>
+                                </TouchableOpacity>
+                                <ThemedText
+                                  style={[styles.grandTitle, grandDone && { textDecorationLine: 'line-through', opacity: 0.4 }]}
+                                  numberOfLines={1}
+                                >
+                                  {grand.title}
+                                </ThemedText>
+                              </View>
+                            );
+                          })}
+                          <View style={[styles.grandRow, { borderTopColor: grands.length > 0 ? theme.border : 'transparent' }]}>
+                            <Ionicons name="add" size={16} color={theme.primary} />
+                            <TextInput
+                              style={[styles.grandInput, { color: theme.text }]}
+                              placeholder="Добавить..."
+                              placeholderTextColor={theme.textSecondary}
+                              value={grandInputs[child.id] ?? ''}
+                              onChangeText={t => setGrandInputs(prev => ({ ...prev, [child.id]: t }))}
+                              onSubmitEditing={() => handleAddGrand(child.id)}
+                              returnKeyType="done"
+                              blurOnSubmit={false}
+                            />
+                          </View>
+                        </View>
+                      )}
+                    </View>
+                  );
+                })}
+                <View style={[styles.addSubtaskRow, { borderTopColor: childTasks.length > 0 ? theme.border : 'transparent' }]}>
+                  <Ionicons name="add" size={20} color={theme.primary} />
+                  <TextInput
+                    style={[styles.subtaskInput, { color: theme.text }]}
+                    placeholder="Добавить подзадачу..."
+                    placeholderTextColor={theme.textSecondary}
+                    value={childInput}
+                    onChangeText={setChildInput}
+                    onSubmitEditing={handleAddChildTask}
+                    returnKeyType="done"
+                    blurOnSubmit={false}
+                  />
+                </View>
+              </View>
+            </View>
+
+            <View style={{ height: 24 }} />
+          </ScrollView>
+        </KeyboardAvoidingView>
       </SafeAreaView>
 
       <DatePickerModal
@@ -472,12 +487,18 @@ export default function TaskDetailScreen() {
         onSelect={handleSetDueDate}
         onClose={() => setDueDatePickerOpen(false)}
       />
-      <DatePickerModal
-        visible={reminderPickerOpen}
-        value={reminderDate}
-        onSelect={(date) => { setReminderDate(date); setNotifId(null); }}
-        onClose={() => setReminderPickerOpen(false)}
-      />
+
+      {/* Просмотр фото на весь экран */}
+      <Modal visible={viewerUri !== null} transparent animationType="fade" onRequestClose={() => setViewerUri(null)}>
+        <Pressable style={styles.viewerOverlay} onPress={() => setViewerUri(null)}>
+          {viewerUri && (
+            <Image source={{ uri: viewerUri }} style={styles.viewerImage} resizeMode="contain" />
+          )}
+          <TouchableOpacity style={styles.viewerClose} onPress={() => setViewerUri(null)}>
+            <Ionicons name="close" size={28} color="#fff" />
+          </TouchableOpacity>
+        </Pressable>
+      </Modal>
     </ThemedView>
   );
 }
@@ -547,39 +568,50 @@ const styles = StyleSheet.create({
     letterSpacing: 0.8,
   },
 
-  priorityRow: {
-    flexDirection: 'row',
-    gap: 8,
-  },
-  priorityChip: {
+  noteInput: {
+    borderRadius: 12,
+    borderWidth: 1,
     paddingHorizontal: 14,
-    paddingVertical: 7,
-    borderRadius: 20,
-    borderWidth: 1.5,
+    paddingVertical: 12,
+    fontSize: 15,
+    minHeight: 90,
+    lineHeight: 22,
   },
-  priorityChipText: {
+
+  attachHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  addPhotoBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+  },
+  addPhotoText: {
     fontSize: 13,
     fontWeight: '600',
   },
-
-  recurrenceRow: {
+  thumbGrid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
     gap: 8,
   },
-  recurrenceChip: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    paddingHorizontal: 12,
-    paddingVertical: 7,
-    borderRadius: 20,
-    borderWidth: 1.5,
+  thumb: {
+    borderRadius: 10,
+    backgroundColor: '#ccc',
   },
-  recurrenceChipText: {
-    fontSize: 13,
-    fontWeight: '600',
+
+  chipsRow: { flexDirection: 'row', gap: 8, alignItems: 'center' },
+  chipsWrap: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  chip: {
+    flexDirection: 'row', alignItems: 'center', gap: 6,
+    paddingHorizontal: 12, paddingVertical: 7,
+    borderRadius: 20, borderWidth: 1.5,
   },
+  chipText: { fontSize: 13, fontWeight: '600' },
+  chipDot: { width: 8, height: 8, borderRadius: 4 },
+
   subtaskHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -594,47 +626,44 @@ const styles = StyleSheet.create({
     height: 4,
     borderRadius: 2,
   },
-  tagsWrap: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, alignItems: 'center' },
-  tagInputRow: {
-    flexDirection: 'row', alignItems: 'center',
-    borderRadius: 10, borderWidth: 1,
-    paddingHorizontal: 8, paddingVertical: 4, gap: 2,
-  },
-  tagHash: { fontSize: 13, fontWeight: '600' },
-  tagInput: { fontSize: 13, minWidth: 80, paddingVertical: 0 },
-
-  reminderCard: {
-    borderRadius: 14, borderWidth: 1, overflow: 'hidden',
-  },
-  reminderDateRow: {
-    flexDirection: 'row', alignItems: 'center', gap: 10,
-    paddingHorizontal: 14, paddingVertical: 12,
-  },
-  reminderDateText: { flex: 1, fontSize: 14, fontWeight: '600' },
-  timeDivider: { height: 1 },
-  timePickerRow: {
-    flexDirection: 'row', alignItems: 'center',
-    paddingHorizontal: 14, paddingVertical: 10, gap: 10,
-  },
-  timeSpinner: { alignItems: 'center', gap: 2 },
-  timeSpinnerVal: { fontSize: 22, fontWeight: '700', minWidth: 32, textAlign: 'center' },
-  timeColon: { fontSize: 22, fontWeight: '700', marginBottom: 2 },
-  setReminderBtn: {
-    flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
-    gap: 6, paddingVertical: 10, borderRadius: 10,
-  },
-  setReminderBtnText: { color: '#fff', fontSize: 13, fontWeight: '600' },
-  activeReminderRow: {
-    flexDirection: 'row', alignItems: 'center', gap: 10,
-    paddingHorizontal: 14, paddingVertical: 12,
-  },
-  activeReminderText: { flex: 1, fontSize: 14, fontWeight: '600' },
-
   subtaskList: {
     borderRadius: 14,
     borderWidth: 1,
     overflow: 'hidden',
   },
+  childTaskRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    paddingVertical: 13,
+    gap: 12,
+    borderTopWidth: StyleSheet.hairlineWidth,
+  },
+  childCheck: {
+    width: 20, height: 20, borderRadius: 10, borderWidth: 2,
+    alignItems: 'center', justifyContent: 'center',
+  },
+  childTaskTitle: { flex: 1, fontSize: 15 },
+
+  grandList: {
+    borderTopWidth: StyleSheet.hairlineWidth,
+    paddingLeft: 48,
+  },
+  grandRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    gap: 10,
+    borderTopWidth: StyleSheet.hairlineWidth,
+  },
+  grandCheck: {
+    width: 16, height: 16, borderRadius: 8, borderWidth: 1.5,
+    alignItems: 'center', justifyContent: 'center',
+  },
+  grandTitle: { flex: 1, fontSize: 14 },
+  grandInput: { flex: 1, fontSize: 14, paddingVertical: 0 },
+
   addSubtaskRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -647,5 +676,24 @@ const styles = StyleSheet.create({
     flex: 1,
     fontSize: 15,
     paddingVertical: 0,
+  },
+
+  viewerOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.95)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  viewerImage: {
+    width: '100%',
+    height: '100%',
+  },
+  viewerClose: {
+    position: 'absolute',
+    top: 56,
+    right: 20,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    borderRadius: 20,
+    padding: 6,
   },
 });

@@ -88,4 +88,8 @@ export async function initDatabase(): Promise<void> {
   try {
     await db.execAsync(`ALTER TABLE tasks ADD COLUMN recurrence TEXT NOT NULL DEFAULT 'none';`);
   } catch { }
+
+  try {
+    await db.execAsync(`ALTER TABLE tasks ADD COLUMN attachments TEXT NOT NULL DEFAULT '[]';`);
+  } catch { }
 }

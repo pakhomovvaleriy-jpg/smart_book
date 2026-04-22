@@ -17,6 +17,7 @@ export interface Task {
   reminder_at?: string | null;
   recurrence?: Recurrence;
   tags: string[];
+  attachments?: string[];
   created_at: string;
   updated_at: string;
   // подсчёт подпунктов (добавляется через JOIN)

@@ -1,4 +1,4 @@
-import { useRef, useState, useEffect } from 'react';
+import { useRef, useState, useEffect, useCallback } from 'react';
 import { View, TouchableOpacity, Text, StyleSheet } from 'react-native';
 import PagerView from 'react-native-pager-view';
 import { Ionicons } from '@expo/vector-icons';
@@ -26,17 +26,22 @@ export default function TabsLayout() {
   const pagerRef = useRef<PagerView>(null);
   const [activeTab, setActiveTab] = useState(0);
   const { activeTab: storeTab, setTab } = useTabStore();
+  const currentPageRef = useRef(0);
 
   useEffect(() => {
-    pagerRef.current?.setPage(storeTab);
-    setActiveTab(storeTab);
+    if (storeTab !== currentPageRef.current) {
+      currentPageRef.current = storeTab;
+      pagerRef.current?.setPage(storeTab);
+      setActiveTab(storeTab);
+    }
   }, [storeTab]);
 
-  function onTabPress(index: number) {
+  const onTabPress = useCallback((index: number) => {
+    currentPageRef.current = index;
     pagerRef.current?.setPage(index);
     setActiveTab(index);
     setTab(index);
-  }
+  }, [setTab]);
 
   return (
     <View style={{ flex: 1, backgroundColor: theme.background }}>
@@ -44,7 +49,7 @@ export default function TabsLayout() {
         ref={pagerRef}
         style={{ flex: 1 }}
         initialPage={0}
-        onPageSelected={e => { const pos = e.nativeEvent.position; setActiveTab(pos); setTab(pos); }}
+        onPageSelected={e => { const pos = e.nativeEvent.position; currentPageRef.current = pos; setActiveTab(pos); setTab(pos); }}
       >
         <View key="0" style={{ flex: 1 }}><TodayScreen /></View>
         <View key="1" style={{ flex: 1 }}><TasksScreen /></View>
